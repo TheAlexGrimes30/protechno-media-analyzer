@@ -7,7 +7,7 @@ REM  Pro-Techno PROD - build frontend and serve through FastAPI.
 REM ============================================================
 
 set "BACKEND_DIR=%~dp0"
-set "FRONTEND_DIR=D:\DS\Pro-Techno"
+set "FRONTEND_DIR=%~dp0frontend"
 
 echo.
 echo ====== Pro-Techno PROD ======

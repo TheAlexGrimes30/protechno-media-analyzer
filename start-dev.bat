@@ -7,7 +7,7 @@ REM  Pro-Techno DEV - uvicorn (8000) + Vite (5173).
 REM ============================================================
 
 set "BACKEND_DIR=%~dp0"
-set "FRONTEND_DIR=D:\DS\Pro-Techno"
+set "FRONTEND_DIR=%~dp0frontend"
 
 echo.
 echo ====== Pro-Techno DEV ======
