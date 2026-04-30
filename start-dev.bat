@@ -20,6 +20,7 @@ REM --- 1) Python ---
 set "PYTHON_CMD="
 where python >nul 2>nul && set "PYTHON_CMD=python"
 if not defined PYTHON_CMD if defined CONDA_PREFIX if exist "%CONDA_PREFIX%\python.exe" set "PYTHON_CMD=%CONDA_PREFIX%\python.exe"
+if not defined PYTHON_CMD if exist "D:\Conda\envs\protechno-media-analyzer\python.exe" set "PYTHON_CMD=D:\Conda\envs\protechno-media-analyzer\python.exe"
 if not defined PYTHON_CMD if exist "D:\Conda\python.exe" set "PYTHON_CMD=D:\Conda\python.exe"
 if not defined PYTHON_CMD (
   echo [!] Python not found in PATH or conda.
@@ -29,8 +30,8 @@ if not defined PYTHON_CMD (
 echo [bk] Python: %PYTHON_CMD%
 
 REM --- 2) Backend deps ---
-echo [bk] Checking fastapi/uvicorn/sqlalchemy/asyncpg/pydantic-settings...
-"%PYTHON_CMD%" -c "import fastapi, uvicorn, sqlalchemy, asyncpg, pydantic_settings, multipart" 2>nul
+echo [bk] Checking backend packages...
+"%PYTHON_CMD%" -c "import fastapi, uvicorn, sqlalchemy, asyncpg, pydantic_settings, multipart, jose, passlib" 2>nul
 if errorlevel 1 (
   echo [bk] Missing packages - installing from requirements.txt
   "%PYTHON_CMD%" -m pip install --disable-pip-version-check -r "%BACKEND_DIR%requirements.txt"
@@ -81,7 +82,7 @@ echo.
 
 REM --- 6) Run ---
 echo [run] Starting backend on port 8000...
-start "Pro-Techno backend" cmd /k "cd /d %BACKEND_DIR% && set BACKEND_HOST=0.0.0.0&& set BACKEND_PORT=8000&& set BACKEND_RELOAD=true&& \"%PYTHON_CMD%\" -m backend.app.main"
+start "Pro-Techno backend" cmd /k "cd /d %BACKEND_DIR% && set BACKEND_HOST=0.0.0.0&& set BACKEND_PORT=8000&& set BACKEND_RELOAD=true&& %PYTHON_CMD% -m backend.app.main"
 
 timeout /t 2 /nobreak > nul
 

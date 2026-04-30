@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     VK_PARSER_COUNT_PER_REQUEST: int = 10
     VK_PARSER_MAX_POSTS: int = 10
 
+    # Auth
+    JWT_SECRET: str = "change-me-in-production-secret-key-32chars"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_DAYS: int = 7
+
     # Ollama / LLM
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"

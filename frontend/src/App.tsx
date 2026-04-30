@@ -1,17 +1,20 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { llmGenerate, vkDeletePost, vkPoster, vkUploadPhoto } from "./api";
+import {
+  llmGenerate, vkDeletePost, vkPoster, vkUploadPhoto,
+  authLogin, authRegister, apiGetMe,
+  apiGetPosts, apiCreatePost, apiUpdatePostVk, apiDeletePost,
+  apiGetCalendarEvents, apiCreateCalendarEvent, apiUpdateCalendarEvent, apiDeleteCalendarEvent,
+  JWT_KEY, getStoredToken,
+  type ApiPost, type ApiCalendarEvent,
+} from "./api";
 
 type AuthMode = "login" | "register";
 type User = {
   email: string;
-  passwordHash?: string;
-  passwordSalt?: string;
-  password?: string;
   createdAt: string;
 };
 type MessageType = "success" | "error" | "idle";
-type GuardEntry = { fails: number; lockedUntil: number };
 type VerificationEntry = {
   email: string;
   codeHash: string;
@@ -50,15 +53,10 @@ type ContentEvent = {
   vkPublishError?: string;
 };
 
-const USERS_KEY = "protechno_users";
-const AUTH_GUARD_KEY = "protechno_auth_guard";
 const SESSION_KEY = "protechno_session";
+const USERS_KEY = "protechno_users";
 const EMAIL_VERIFY_KEY = "protechno_email_verify";
-const EVENTS_KEY = "protechno_events";
-const CONTENT_EVENTS_KEY = "protechno_content_events";
 const THEME_KEY = "protechno_theme";
-const MAX_ATTEMPTS = 5;
-const LOCK_TIME_MS = 60_000;
 const CODE_EXPIRE_MS = 10 * 60_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const WEEK_DAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
@@ -123,24 +121,6 @@ const readUsers = (): User[] => {
   }
 };
 
-const saveUsers = (users: User[]) => {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-};
-
-const readGuard = (): Record<string, GuardEntry> => {
-  const raw = localStorage.getItem(AUTH_GUARD_KEY);
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw) as Record<string, GuardEntry>;
-  } catch {
-    return {};
-  }
-};
-
-const saveGuard = (value: Record<string, GuardEntry>) => {
-  localStorage.setItem(AUTH_GUARD_KEY, JSON.stringify(value));
-};
-
 const readVerification = (): Record<string, VerificationEntry> => {
   const raw = localStorage.getItem(EMAIL_VERIFY_KEY);
   if (!raw) return {};
@@ -153,34 +133,6 @@ const readVerification = (): Record<string, VerificationEntry> => {
 
 const saveVerification = (value: Record<string, VerificationEntry>) => {
   localStorage.setItem(EMAIL_VERIFY_KEY, JSON.stringify(value));
-};
-
-const readEvents = (): CalendarEvent[] => {
-  const raw = localStorage.getItem(EVENTS_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as CalendarEvent[];
-  } catch {
-    return [];
-  }
-};
-
-const saveEvents = (events: CalendarEvent[]) => {
-  localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
-};
-
-const readContentEvents = (): ContentEvent[] => {
-  const raw = localStorage.getItem(CONTENT_EVENTS_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as ContentEvent[];
-  } catch {
-    return [];
-  }
-};
-
-const saveContentEvents = (items: ContentEvent[]) => {
-  localStorage.setItem(CONTENT_EVENTS_KEY, JSON.stringify(items));
 };
 
 const passwordRules = (pass: string) => ({
@@ -243,34 +195,25 @@ const statusLabel: Record<EventStatus, string> = {
   published: "Опубликован",
 };
 
-const toCalendarDateRange = (date: string, time: string, durationMin: number) => {
+const buildCalendarUrl = (title: string, date: string, time: string, duration: number) => {
   const [year, month, day] = date.split("-").map(Number);
   const [hours, minutes] = time.split(":").map(Number);
-  const start = new Date(Date.UTC(year, month - 1, day, hours, minutes));
-  const end = new Date(start.getTime() + durationMin * 60 * 1000);
-
+  const start = new Date(year, month - 1, day, hours, minutes);
+  const end = new Date(start.getTime() + duration * 60_000);
   const fmt = (d: Date) =>
-    `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(
-      d.getUTCDate()
-    ).padStart(2, "0")}T${String(d.getUTCHours()).padStart(2, "0")}${String(
-      d.getUTCMinutes()
-    ).padStart(2, "0")}00Z`;
-
-  return `${fmt(start)}/${fmt(end)}`;
-};
-
-const buildCalendarUrl = (title: string, date: string, time: string, duration: number) => {
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` +
+    `T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:00`;
   const params = new URLSearchParams({
-    action: "TEMPLATE",
-    text: title,
-    dates: toCalendarDateRange(date, time, duration),
-    details: "Событие создано в медиахабе команды Безумный MAX",
+    name: title,
+    from: fmt(start),
+    to: fmt(end),
+    description: "Событие создано в медиахабе команды Безумный MAX",
   });
-  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  return `https://calendar.yandex.ru/event/create?${params.toString()}`;
 };
 
-const canSendRealEmail = (): boolean =>
-  Boolean(EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY);
+// Для локального демо всегда используем тестовый код вместо реальной отправки письма.
+const canSendRealEmail = (): boolean => false;
 
 const sendCodeByEmail = async (email: string, code: string): Promise<void> => {
   const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
@@ -295,6 +238,32 @@ const sendCodeByEmail = async (email: string, code: string): Promise<void> => {
   }
 };
 
+function apiPostToContentEvent(post: ApiPost): ContentEvent {
+  return {
+    id: post.id,
+    title: post.title,
+    prompt: post.text_draft ?? "",
+    tone: post.tone ?? "",
+    generatedText: post.text_generated ?? "",
+    createdAt: post.created_at,
+    vkWallUrl: post.vk_wall_url ?? undefined,
+    vkPostId: post.vk_post_id ? Number(post.vk_post_id) : undefined,
+  };
+}
+
+function apiCalendarEventToCalendarEvent(ev: ApiCalendarEvent): CalendarEvent {
+  return {
+    id: ev.id,
+    title: ev.title,
+    date: ev.date,
+    startTime: ev.start_time,
+    endTime: ev.end_time,
+    description: ev.description,
+    status: ev.status as EventStatus,
+    platforms: ev.platforms,
+  };
+}
+
 function App() {
   const [showIntro, setShowIntro] = useState(true);
   const [introStep, setIntroStep] = useState(1);
@@ -304,8 +273,8 @@ function App() {
   const [calendarView, setCalendarView] = useState<CalendarView>("month");
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
   const [selectedDay, setSelectedDay] = useState<string>(toInputDate(new Date()));
-  const [events, setEvents] = useState<CalendarEvent[]>(() => readEvents());
-  const [contentEvents, setContentEvents] = useState<ContentEvent[]>(() => readContentEvents());
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [contentEvents, setContentEvents] = useState<ContentEvent[]>([]);
   const [contentMessage, setContentMessage] = useState("");
   const [contentMessageType, setContentMessageType] = useState<MessageType>("idle");
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
@@ -322,6 +291,8 @@ function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [authMessageType, setAuthMessageType] = useState<MessageType>("idle");
   const [authLoading, setAuthLoading] = useState(false);
+  const [authToken, setAuthToken] = useState<string>(() => getStoredToken());
+  const [dataLoading, setDataLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<string>(() => {
     return localStorage.getItem(SESSION_KEY) ?? sessionStorage.getItem(SESSION_KEY) ?? "";
   });
@@ -376,146 +347,49 @@ function App() {
     event.preventDefault();
     const normalizedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
+    const trimmedName = normalizedEmail.split("@")[0];
 
-    if (!normalizedEmail || !trimmedPassword || (authMode === "register" && !confirmPassword)) {
+    if (!normalizedEmail || !trimmedPassword) {
       setAuthMessageType("error");
       setAuthMessage("Пожалуйста, заполните все поля.");
       return;
     }
-    if (!EMAIL_REGEX.test(normalizedEmail)) {
+    if (authMode === "register" && trimmedPassword !== confirmPassword.trim()) {
       setAuthMessageType("error");
-      setAuthMessage("Введите корректный e-mail.");
+      setAuthMessage("Пароли не совпадают.");
       return;
     }
 
     setAuthLoading(true);
     try {
-      const users = readUsers();
-      const existing = users.find((user) => user.email === normalizedEmail);
+      const res = authMode === "register"
+        ? await authRegister(normalizedEmail, trimmedName, trimmedPassword)
+        : await authLogin(normalizedEmail, trimmedPassword);
 
-      if (authMode === "register") {
-        const rules = passwordRules(trimmedPassword);
-        if (!Object.values(rules).every(Boolean)) {
-          setAuthMessageType("error");
-          setAuthMessage("Пароль не соответствует требованиям безопасности.");
-          return;
-        }
-        if (trimmedPassword !== confirmPassword.trim()) {
-          setAuthMessageType("error");
-          setAuthMessage("Пароли не совпадают.");
-          return;
-        }
-        if (existing) {
-          setAuthMessageType("error");
-          setAuthMessage("Эта почта уже зарегистрирована.");
-          return;
-        }
-        const verifications = readVerification();
-        const verifyEntry = verifications[normalizedEmail];
-        if (!verifyEntry?.verified || verifyEntry.expiresAt < Date.now()) {
-          setAuthMessageType("error");
-          setAuthMessage("Подтвердите e-mail кодом из письма.");
-          return;
-        }
-
-        const salt = randomSalt();
-        const hash = await hashPassword(trimmedPassword, salt);
-        users.push({
-          email: normalizedEmail,
-          passwordSalt: salt,
-          passwordHash: hash,
-          createdAt: new Date().toISOString(),
-        });
-        saveUsers(users);
-        delete verifications[normalizedEmail];
-        saveVerification(verifications);
-        setAuthMessageType("success");
-        setAuthMessage("Аккаунт успешно создан. Теперь войдите в систему.");
-        setAuthMode("login");
-        setPassword("");
-        setConfirmPassword("");
-        setVerificationCode("");
-        setCodeSent(false);
-        setCodeVerified(false);
-        setCodeDebugHint("");
-        return;
-      }
-
-      const guard = readGuard();
-      const entry = guard[normalizedEmail];
-      if (entry?.lockedUntil && entry.lockedUntil > Date.now()) {
-        const seconds = Math.ceil((entry.lockedUntil - Date.now()) / 1000);
-        setAuthMessageType("error");
-        setAuthMessage(`Слишком много попыток. Повторите через ${seconds} сек.`);
-        return;
-      }
-
-      if (!existing) {
-        guard[normalizedEmail] = {
-          fails: (entry?.fails ?? 0) + 1,
-          lockedUntil:
-            (entry?.fails ?? 0) + 1 >= MAX_ATTEMPTS ? Date.now() + LOCK_TIME_MS : entry?.lockedUntil ?? 0,
-        };
-        saveGuard(guard);
-        setAuthMessageType("error");
-        setAuthMessage("Неверная почта или пароль.");
-        return;
-      }
-
-      let isValid = false;
-      if (existing.passwordHash && existing.passwordSalt) {
-        const candidateHash = await hashPassword(trimmedPassword, existing.passwordSalt);
-        isValid = candidateHash === existing.passwordHash;
-      } else if (existing.password) {
-        // Миграция с устаревшего формата хранения в localStorage.
-        isValid = trimmedPassword === existing.password;
-        if (isValid) {
-          const salt = randomSalt();
-          existing.passwordSalt = salt;
-          existing.passwordHash = await hashPassword(trimmedPassword, salt);
-          delete existing.password;
-          saveUsers(users);
-        }
-      }
-
-      if (!isValid) {
-        const fails = (entry?.fails ?? 0) + 1;
-        guard[normalizedEmail] = {
-          fails,
-          lockedUntil: fails >= MAX_ATTEMPTS ? Date.now() + LOCK_TIME_MS : 0,
-        };
-        saveGuard(guard);
-        setAuthMessageType("error");
-        setAuthMessage(
-          fails >= MAX_ATTEMPTS
-            ? "Аккаунт временно заблокирован на 60 секунд."
-            : `Неверный пароль. Осталось попыток: ${MAX_ATTEMPTS - fails}.`
-        );
-        return;
-      }
-
-      delete guard[normalizedEmail];
-      saveGuard(guard);
-
+      localStorage.setItem(JWT_KEY, res.access_token);
       if (rememberMe) {
-        localStorage.setItem(SESSION_KEY, normalizedEmail);
+        localStorage.setItem(SESSION_KEY, res.email);
         sessionStorage.removeItem(SESSION_KEY);
       } else {
-        sessionStorage.setItem(SESSION_KEY, normalizedEmail);
+        sessionStorage.setItem(SESSION_KEY, res.email);
         localStorage.removeItem(SESSION_KEY);
       }
-      setCurrentUser(normalizedEmail);
+      setAuthToken(res.access_token);
+      setCurrentUser(res.email);
       setAuthMessageType("success");
-      setAuthMessage("Вход выполнен успешно. Добро пожаловать!");
+      setAuthMessage(authMode === "register" ? "Аккаунт создан. Добро пожаловать!" : "Вход выполнен. Добро пожаловать!");
       setAuthModalOpen(false);
       setPassword("");
       setConfirmPassword("");
+    } catch (err) {
+      setAuthMessageType("error");
+      setAuthMessage(err instanceof Error ? err.message : "Ошибка сервера");
     } finally {
       setAuthLoading(false);
     }
   };
 
-  const handleCalendarSubmit = (event: FormEvent) => {
+  const handleCalendarSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!eventTitle.trim() || !eventDate || !eventTime || duration < 15) {
       setCalendarMessageType("error");
@@ -527,36 +401,54 @@ function App() {
     const start = new Date(`${eventDate}T${startTime}:00`);
     const end = new Date(start.getTime() + duration * 60_000);
     const endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+    const desc = eventDescription.trim() || "Событие медиахаба";
+    const platforms = eventPlatforms.length ? eventPlatforms : ["VK"];
 
-    const newEvent: CalendarEvent = {
-      id: editingEventId ?? crypto.randomUUID(),
-      title,
-      date: eventDate,
-      startTime,
-      endTime,
-      description: eventDescription.trim() || "Событие медиахаба",
-      status: eventStatus,
-      platforms: eventPlatforms.length ? eventPlatforms : ["VK"],
-    };
-    const nextEvents = editingEventId
-      ? events.map((ev) => (ev.id === editingEventId ? newEvent : ev))
-      : [...events, newEvent];
-    nextEvents.sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-    setEvents(nextEvents);
-    saveEvents(nextEvents);
-
-    const url = buildCalendarUrl(title, eventDate, eventTime, duration);
-    window.open(url, "_blank", "noopener,noreferrer");
-    setCalendarMessageType("success");
-    setCalendarMessage(editingEventId ? "Событие обновлено и открыто в календаре." : "Событие создано и открыто в календаре.");
-    setCalendarModalOpen(false);
-    setEditingEventId(null);
+    try {
+      let saved: CalendarEvent;
+      if (editingEventId) {
+        const res = await apiUpdateCalendarEvent(authToken, editingEventId, {
+          title, date: eventDate, description: desc,
+          start_time: startTime, end_time: endTime, status: eventStatus, platforms,
+        });
+        saved = apiCalendarEventToCalendarEvent(res);
+        setEvents((prev) => {
+          const next = prev.map((ev) => ev.id === editingEventId ? saved : ev);
+          next.sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+          return next;
+        });
+      } else {
+        const res = await apiCreateCalendarEvent(authToken, {
+          title, date: eventDate, description: desc,
+          start_time: startTime, end_time: endTime, status: eventStatus, platforms,
+        });
+        saved = apiCalendarEventToCalendarEvent(res);
+        setEvents((prev) => {
+          const next = [...prev, saved];
+          next.sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+          return next;
+        });
+      }
+      const url = buildCalendarUrl(title, eventDate, eventTime, duration);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setCalendarMessageType("success");
+      setCalendarMessage(editingEventId ? "Событие обновлено и открыто в календаре." : "Событие создано и открыто в календаре.");
+      setCalendarModalOpen(false);
+      setEditingEventId(null);
+    } catch (err) {
+      setCalendarMessageType("error");
+      setCalendarMessage(err instanceof Error ? err.message : "Ошибка при сохранении события");
+    }
   };
 
-  const removeEvent = (id: string) => {
-    const next = events.filter((ev) => ev.id !== id);
-    setEvents(next);
-    saveEvents(next);
+  const removeEvent = async (id: string) => {
+    try {
+      await apiDeleteCalendarEvent(authToken, id);
+      setEvents((prev) => prev.filter((ev) => ev.id !== id));
+    } catch (err) {
+      setCalendarMessageType("error");
+      setCalendarMessage(err instanceof Error ? err.message : "Ошибка при удалении события");
+    }
   };
 
   const openCreateEvent = (date?: string) => {
@@ -601,18 +493,11 @@ function App() {
     setSmartEventOpen(true);
   };
 
-  const removeContentEvent = (id: string) => {
-    const next = contentEvents.filter((c) => c.id !== id);
-    setContentEvents(next);
-    saveContentEvents(next);
-  };
-
-  const updateContentEvents = (updater: (prev: ContentEvent[]) => ContentEvent[]) => {
-    setContentEvents((prev) => {
-      const next = updater(prev);
-      saveContentEvents(next);
-      return next;
-    });
+  const removeContentEvent = async (id: string) => {
+    if (authToken) {
+      try { await apiDeletePost(authToken, id); } catch {}
+    }
+    setContentEvents((prev) => prev.filter((c) => c.id !== id));
   };
 
   const closeSmartEvent = () => {
@@ -695,9 +580,9 @@ function App() {
     }
     let attachments: string | null = null;
     if (imageFile) {
-      attachments = await vkUploadPhoto(imageFile);
+      attachments = await vkUploadPhoto(authToken, imageFile);
     }
-    const vk = await vkPoster({ message, attachments, from_group: true });
+    const vk = await vkPoster(authToken, { message, attachments, from_group: true });
     return { url: vk.url, postId: vk.post_id };
   };
 
@@ -709,17 +594,38 @@ function App() {
       return;
     }
     const generatedText = (smartGenerated.trim() || smartPrompt.trim() || "").slice(0, 12_000);
-    const newItem: ContentEvent = {
-      id: crypto.randomUUID(),
-      title: smartTitle.trim(),
-      prompt: smartPrompt.trim(),
-      tone: smartTone.trim(),
-      generatedText,
-      attachmentName: smartImageFile?.name ?? undefined,
-      attachmentDataUrl: smartImagePreview ?? undefined,
-      createdAt: new Date().toISOString(),
-    };
-    updateContentEvents((prev) => [newItem, ...prev]);
+
+    let savedPost: ApiPost | null = null;
+    if (authToken) {
+      try {
+        savedPost = await apiCreatePost(authToken, {
+          title: smartTitle.trim(),
+          text_draft: smartPrompt.trim(),
+          text_generated: generatedText,
+          tone: smartTone.trim(),
+          vk_post_id: null,
+        });
+      } catch {}
+    }
+
+    const newItem: ContentEvent = savedPost
+      ? {
+          ...apiPostToContentEvent(savedPost),
+          attachmentName: smartImageFile?.name ?? undefined,
+          attachmentDataUrl: smartImagePreview ?? undefined,
+        }
+      : {
+          id: crypto.randomUUID(),
+          title: smartTitle.trim(),
+          prompt: smartPrompt.trim(),
+          tone: smartTone.trim(),
+          generatedText,
+          attachmentName: smartImageFile?.name ?? undefined,
+          attachmentDataUrl: smartImagePreview ?? undefined,
+          createdAt: new Date().toISOString(),
+        };
+
+    setContentEvents((prev) => [newItem, ...prev]);
 
     if (publishToVk) {
       setVkPublishing(true);
@@ -727,7 +633,10 @@ function App() {
       setSmartMessage("");
       try {
         const vk = await publishContentEventToVk(newItem, smartImageFile);
-        updateContentEvents((prev) =>
+        if (authToken && savedPost) {
+          try { await apiUpdatePostVk(authToken, savedPost.id, String(vk.postId)); } catch {}
+        }
+        setContentEvents((prev) =>
           prev.map((e) =>
             e.id === newItem.id ? { ...e, vkWallUrl: vk.url, vkPostId: vk.postId, vkPublishError: undefined } : e
           )
@@ -737,7 +646,7 @@ function App() {
       } catch (err) {
         const errorText =
           err instanceof Error ? err.message : "Ошибка VK (проверьте бэкенд: токен, группа, proxy).";
-        updateContentEvents((prev) =>
+        setContentEvents((prev) =>
           prev.map((e) => (e.id === newItem.id ? { ...e, vkPublishError: errorText } : e))
         );
         setContentMessageType("error");
@@ -764,7 +673,10 @@ function App() {
         ? dataUrlToFile(target.attachmentDataUrl, target.attachmentName ?? "photo.jpg")
         : null;
       const vk = await publishContentEventToVk(target, imageFile);
-      updateContentEvents((prev) =>
+      if (authToken) {
+        try { await apiUpdatePostVk(authToken, id, String(vk.postId)); } catch {}
+      }
+      setContentEvents((prev) =>
         prev.map((item) =>
           item.id === id ? { ...item, vkWallUrl: vk.url, vkPostId: vk.postId, vkPublishError: undefined } : item
         )
@@ -774,7 +686,7 @@ function App() {
     } catch (err) {
       const errorText =
         err instanceof Error ? err.message : "Ошибка VK (проверьте бэкенд: токен, группа, proxy).";
-      updateContentEvents((prev) =>
+      setContentEvents((prev) =>
         prev.map((item) => (item.id === id ? { ...item, vkPublishError: errorText } : item))
       );
       setContentMessageType("error");
@@ -793,11 +705,14 @@ function App() {
     }
     setDeletingVkItemId(id);
     try {
-      const res = await vkDeletePost(target.vkPostId);
+      const res = await vkDeletePost(authToken, target.vkPostId);
       if (!res.success) {
         throw new Error("VK вернул неуспешный результат удаления.");
       }
-      updateContentEvents((prev) =>
+      if (authToken) {
+        try { await apiUpdatePostVk(authToken, id, null); } catch {}
+      }
+      setContentEvents((prev) =>
         prev.map((item) =>
           item.id === id
             ? { ...item, vkWallUrl: undefined, vkPostId: undefined, vkPublishError: undefined }
@@ -896,8 +811,7 @@ function App() {
     if (introFinishedRef.current) return;
     introFinishedRef.current = true;
     setShowIntro(false);
-    // После заставки сразу показываем авторизацию только для гостя.
-    if (!currentUser) {
+    if (!currentUser && !getStoredToken()) {
       openAuth("login");
     }
   };
@@ -905,7 +819,11 @@ function App() {
   const logout = () => {
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(JWT_KEY);
     setCurrentUser("");
+    setAuthToken("");
+    setEvents([]);
+    setContentEvents([]);
   };
 
   const passStrength = useMemo(() => passwordStrength(password), [password]);
@@ -989,8 +907,8 @@ function App() {
     }
 
     setAuthLoading(true);
+    const code = generateCode();
     try {
-      const code = generateCode();
       const salt = randomSalt();
       const codeHash = await hashPassword(code, salt);
       const verifications = readVerification();
@@ -1004,10 +922,19 @@ function App() {
       saveVerification(verifications);
 
       if (canSendRealEmail()) {
-        await sendCodeByEmail(normalizedEmail, code);
-        setCodeDebugHint("");
-        setAuthMessageType("success");
-        setAuthMessage("Код отправлен на почту. Проверьте входящие и спам.");
+        try {
+          await sendCodeByEmail(normalizedEmail, code);
+          setCodeDebugHint("");
+          setAuthMessageType("success");
+          setAuthMessage("Код отправлен на почту. Проверьте входящие и спам.");
+        } catch {
+          // Даже при битых настройках EmailJS не блокируем локальную регистрацию.
+          setCodeDebugHint(`Тестовый код: ${code}`);
+          setAuthMessageType("success");
+          setAuthMessage(
+            "EmailJS недоступен. Для демо используйте тестовый код ниже."
+          );
+        }
       } else {
         // Режим без backend/почтового шлюза: код показывается для локального теста.
         setCodeDebugHint(`Тестовый код: ${code}`);
@@ -1021,8 +948,27 @@ function App() {
       setCodeVerified(false);
       setVerificationCode("");
     } catch {
-      setAuthMessageType("error");
-      setAuthMessage("Ошибка отправки письма. Повторите попытку или проверьте настройки EmailJS.");
+      // Последний fallback для локального демо: не блокируем регистрацию из-за любых сбоев.
+      try {
+        const salt = randomSalt();
+        const codeHash = await hashPassword(code, salt);
+        const verifications = readVerification();
+        verifications[normalizedEmail] = {
+          email: normalizedEmail,
+          codeHash,
+          salt,
+          expiresAt: Date.now() + CODE_EXPIRE_MS,
+          verified: false,
+        };
+        saveVerification(verifications);
+      } catch {}
+
+      setCodeDebugHint(`Тестовый код: ${code}`);
+      setCodeSent(true);
+      setCodeVerified(false);
+      setVerificationCode("");
+      setAuthMessageType("success");
+      setAuthMessage("Почта недоступна. Для демо используйте тестовый код ниже.");
     } finally {
       setAuthLoading(false);
     }
@@ -1086,8 +1032,31 @@ function App() {
   }, [currentUser]);
 
   useEffect(() => {
+    const token = getStoredToken();
+    if (!token || currentUser) return;
+    apiGetMe(token)
+      .then((me) => {
+        setCurrentUser(me.email);
+        setAuthToken(token);
+      })
+      .catch(() => {
+        localStorage.removeItem(JWT_KEY);
+        setAuthToken("");
+      });
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(THEME_KEY, themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    setDataLoading(true);
+    Promise.all([
+      apiGetCalendarEvents(authToken).then((evs) => setEvents(evs.map(apiCalendarEventToCalendarEvent))).catch(() => {}),
+      apiGetPosts(authToken).then((posts) => setContentEvents(posts.map(apiPostToContentEvent))).catch(() => {}),
+    ]).finally(() => setDataLoading(false));
+  }, [authToken]);
 
   useEffect(() => {
     setThemeAnimating(true);
@@ -1487,7 +1456,27 @@ function App() {
             </motion.div>
           )}
 
-          {activeTab === "content" && (
+          {activeTab === "content" && !authToken && (
+            <motion.section key="content-guest" className="content-page"
+              initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.35 }}>
+              <div className="content-page-head">
+                <div>
+                  <h2 className="content-page-title">Контент</h2>
+                  <p className="muted">Войдите в систему, чтобы управлять контентом.</p>
+                </div>
+                <button className="btn btn-primary" type="button" onClick={() => openAuth("login")}>Войти</button>
+              </div>
+            </motion.section>
+          )}
+
+          {activeTab === "content" && authToken && dataLoading && (
+            <motion.section key="content-loading" className="content-page"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+              <p className="muted" style={{ textAlign: "center", marginTop: "3rem" }}>Загрузка данных…</p>
+            </motion.section>
+          )}
+
+          {activeTab === "content" && authToken && !dataLoading && (
             <motion.section
               key="content"
               className="content-page"
@@ -1603,7 +1592,27 @@ function App() {
             </motion.section>
           )}
 
-          {activeTab === "calendar" && (
+          {activeTab === "calendar" && !authToken && (
+            <motion.section key="calendar-guest" className="content-page"
+              initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.35 }}>
+              <div className="content-page-head">
+                <div>
+                  <h2 className="content-page-title">Календарь</h2>
+                  <p className="muted">Войдите в систему, чтобы просматривать и создавать события.</p>
+                </div>
+                <button className="btn btn-primary" type="button" onClick={() => openAuth("login")}>Войти</button>
+              </div>
+            </motion.section>
+          )}
+
+          {activeTab === "calendar" && authToken && dataLoading && (
+            <motion.section key="calendar-loading" className="content-page"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+              <p className="muted" style={{ textAlign: "center", marginTop: "3rem" }}>Загрузка данных…</p>
+            </motion.section>
+          )}
+
+          {activeTab === "calendar" && authToken && !dataLoading && (
           <motion.section
             key="calendar"
             className="calendar"

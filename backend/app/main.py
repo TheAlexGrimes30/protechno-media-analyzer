@@ -19,6 +19,9 @@ from backend.modules.condition import router as condition_router
 from backend.modules.dzen import router as dzen_router
 from backend.modules.sheet_parser import router as sheet_parser_router
 from backend.modules.report import router as report_router
+from backend.modules.auth import router as auth_router
+from backend.modules.posts import router as posts_router
+from backend.modules.calendar import router as calendar_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,6 +70,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": str(exc), "traceback": tb})
 
 
+app.include_router(auth_router)
+app.include_router(posts_router)
+app.include_router(calendar_router)
 app.include_router(vk_router)
 app.include_router(llm_router)
 app.include_router(profiles_router)

@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 
+from backend.db.users import User
+from backend.modules.auth.deps import get_current_user
 from backend.modules.vk import service
 from backend.schemas.vk import (
     CreatePostRequest,
@@ -40,7 +42,7 @@ def parse_wall(payload: ParsePostsRequest) -> ParsePostsResponse:
     response_model=CreatePostResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_post(payload: CreatePostRequest) -> CreatePostResponse:
+def create_post(payload: CreatePostRequest, _: User = Depends(get_current_user)) -> CreatePostResponse:
     try:
         post_id = service.create_post(
             message=payload.message,
@@ -54,7 +56,7 @@ def create_post(payload: CreatePostRequest) -> CreatePostResponse:
 
 
 @router.post("/delete", response_model=DeletePostResponse)
-def delete_post(payload: DeletePostRequest) -> DeletePostResponse:
+def delete_post(payload: DeletePostRequest, _: User = Depends(get_current_user)) -> DeletePostResponse:
     try:
         success = service.delete_post(payload.post_id)
     except service.VKAPIError as e:
@@ -63,7 +65,7 @@ def delete_post(payload: DeletePostRequest) -> DeletePostResponse:
 
 
 @router.post("/upload-photo")
-async def upload_photo(file: UploadFile = File(...)):
+async def upload_photo(file: UploadFile = File(...), _: User = Depends(get_current_user)):
     """Загружает фото в VK и возвращает строку вложения (photo{owner}_{id})."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нужен файл изображения")
